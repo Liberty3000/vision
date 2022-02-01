@@ -16,7 +16,7 @@ class TensorTransformDataset(th.utils.data.Dataset):
     def __len__(self):
         return self.tensors[0].size(0)
 
-def PathMNIST(splits, transforms=[], shuffle=True, normalize=True, standardize=True, iterator=True, *args ,**kwargs):
+def PathMNIST(splits, transforms=[], shuffle=True, normalize=True, standardize=False, iterator=True, *args ,**kwargs):
     bundle = dict(image_shape=(3,28,28), num_classes=9)
 
     assert 'PATHMNIST_PATH' in os.environ.keys()
@@ -30,8 +30,8 @@ def PathMNIST(splits, transforms=[], shuffle=True, normalize=True, standardize=T
         X = th.from_numpy(np.load(imgs).astype(np.float32)).float()
         y = th.from_numpy(np.load(labs).astype(np.int64)).long()
 
-        X = X.view(-1, 3, 28, 28)
-        y = y.view(-1, 1)
+        X = X.view(-1, *bundle['image_shape'])
+        y = y.view(-1)
 
         if normalize: X = (X - X.min()) / (X.max() - X.min())
         if standardize: X = X - X.mean() / X.std() + 1e-9
