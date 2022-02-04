@@ -1,5 +1,5 @@
-import os
-import numpy as np, torch as th, torchvision as tv
+import tqdm
+import torch as th, torchvision as tv
 
 class TensorTransformDataset(th.utils.data.Dataset):
     def __init__(self, tensors, transform):
@@ -16,30 +16,12 @@ class TensorTransformDataset(th.utils.data.Dataset):
     def __len__(self):
         return self.tensors[0].size(0)
 
-def PathMNIST(splits, transforms=[], shuffle=True, normalize=True, standardize=False, iterator=True, *args ,**kwargs):
-    bundle = dict(image_shape=(3,28,28), num_classes=9)
+def iterator(generator, device='cuda:0'):
+    pbar = tqdm.tqdm(enumerate(generator), total=len(generator))
+    for itr,(images,labels) in pbar:
+        pbar.update(1)
+        images,labels = images.to(device), labels.to(device).long()
+        yield images, labels
 
-    assert 'PATHMNIST_PATH' in os.environ.keys()
-    path = os.environ['PATHMNIST_PATH']
-
-    for split,bsize in splits.items():
-        if not bsize: continue
-
-        imgs = os.path.join(path, '{}_images.npy'.format(split))
-        labs = os.path.join(path, '{}_labels.npy'.format(split))
-        X = th.from_numpy(np.load(imgs).astype(np.float32)).float()
-        y = th.from_numpy(np.load(labs).astype(np.int64)).long()
-
-        X = X.view(-1, *bundle['image_shape'])
-        y = y.view(-1)
-
-        if normalize: X = (X - X.min()) / (X.max() - X.min())
-        if standardize: X = X - X.mean() / X.std() + 1e-9
-
-        data = TensorTransformDataset((X, y), transform=transforms[split])
-        if iterator: data = th.utils.data.DataLoader(data, batch_size=bsize, shuffle=shuffle)
-        bundle[split] = data
-
-    return bundle
-
-datasets = dict(PathMNIST=PathMNIST)
+from vision.data.MedMNISTv2 import *
+datasets = dict(PathMNIST=PathMNIST, TissueMNIST=TissueMNIST, BloodMNIST=BloodMNIST)
