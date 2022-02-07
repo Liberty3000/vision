@@ -10,8 +10,9 @@ ___
 #### Vision Transformer [![arxiv](https://img.shields.io/badge/arXiv-2010.11929-maroon.svg)](https://arxiv.org/abs/2010.11929)
 
 <p align="center">
-  <img src="https://1.bp.blogspot.com/-_mnVfmzvJWc/X8gMzhZ7SkI/AAAAAAAAG24/8gW2AHEoqUQrBwOqjhYB37A7OOjNyKuNgCLcBGAsYHQ/s1600/image1.gif" width="730" height="416"/>
+  <img src="docs/ViT.png" />
 </p>
+
 
 ```bash
 python -m vision.train --model='vit.ViT' ...
