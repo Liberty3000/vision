@@ -1,0 +1,4 @@
+patch_size: 7
+dim: 512
+depth: 12
+expansion_factor: 4
