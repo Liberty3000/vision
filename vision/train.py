@@ -4,7 +4,7 @@ import mlflow as mf, numpy as np, pandas as pd
 import torch as th, torchmetrics as tm, torchvision as tv
 from torchvision.transforms import Compose
 
-from neurpy.util import enforce_reproducibility
+from neurpy.util import enforce_reproducibility, EarlyStopping
 from vision.data import datasets
 from vision.model import load
 from vision.util import build, checkpoint, log
@@ -19,7 +19,7 @@ def train(trainer, validator=None, **args):
     epoch_ckpt='epoch.{}.sd').items()})
 
     with open(conf.config, 'r') as f: config = yaml.safe_load(f)
-    params = {**args, **config}
+    params = {**args, **config, **run}
 
     os.makedirs(run.dir, exist_ok=True)
     os.chdir(run.dir)
@@ -35,15 +35,17 @@ def train(trainer, validator=None, **args):
     criterion = build(params['loss'], params, th.nn)
     loss_fn = criterion.__class__.__name__
 
+    # load metrics from torchmetrics
+    metrics = dict(train=[build(metric, params, tm) for metric in conf.metrics],
+                     val=[build(metric, params, tm) for metric in conf.metrics])
+
     # load optimizer from torch.optim
     opt = build(params['optim'], dict(params=model.parameters(), **params), th.optim)
 
     # load learning rate scheduler from torch.optim.lr_scheduler
     scheduler = build(params['scheduler'], dict(optimizer=opt, **params), th.optim.lr_scheduler)
 
-    # load metrics from torchmetrics
-    metrics = dict(train=[build(metric, params, tm) for metric in conf.metrics],
-                     val=[build(metric, params, tm) for metric in conf.metrics])
+    early_stopping = None if not conf.early_stopping else EarlyStopping()
     #---------------------------------------------------------------------------
     if conf.init:
         print('restoring weights from `{}`...')
@@ -73,11 +75,12 @@ def train(trainer, validator=None, **args):
             opt.step()
 
             # log training metrics
-            pbar.set_description('{}: {:.5f}'.format(loss_fn, loss.item()))
-            mf.log_metric('{} {}'.format(split, loss_fn), loss.item())
+            mean_loss = loss.item() / (itr + 1)
+            pbar.set_description('{}: {:.5f}'.format(loss_fn, mean_loss))
+            mf.log_metric('{} {}'.format(split, loss_fn), mean_loss)
             for metric in metrics[split]:
                 metric.update(output.cpu().detach(), labels.cpu().detach())
-            report = log(split, metrics)
+            report = {'{} {}'.format(split, loss_fn): mean_loss, **log(split, metrics)}
 
             # batch interval callback
             if itr and itr % conf.batch_interval == 0:
@@ -99,26 +102,31 @@ def train(trainer, validator=None, **args):
                 loss = criterion(output, labels)
                 total_loss += loss.item()
 
+                mean_loss = total_loss / (itr + 1)
+                # log validation metrics
+                pbar.set_description('{}: {:.5f}'.format(loss_fn, mean_loss))
+                for metric in metrics[split]:
+                    metric.update(output.cpu().detach(), labels.cpu().detach())
+
                 # short-circuit validation
                 if conf.test and itr == 1e1: break
             loss = total_loss / len(validator)
 
             # log validation metrics
-            pbar.set_description('{}: {:.5f}'.format(loss_fn, loss))
             mf.log_metric('{} {}'.format(split, loss_fn), loss)
-            for metric in metrics[split]:
-                metric.update(output.cpu().detach(), labels.cpu().detach())
-            val_report = log(split, metrics)
+            val_report = {'{} {}'.format(split, loss_fn): loss, **log(split, metrics)}
     #---------------------------------------------------------------------------
         print('Epoch {} :: {}'.format(epoch, run.id))
         reports.append({**report, **val_report})
         checkpoint(metrics, reports)
+        df = pd.DataFrame(reports).to_csv(run.report, index=False)
 
         if epoch % conf.epoch_interval == 0:
             save_as = run.epoch_ckpt.format(str(epoch).zfill(6))
             th.save((model.state_dict(), opt.state_dict(), epoch), save_as)
 
-        df = pd.DataFrame(reports).to_csv(run.report, index=False)
+        if early_stopping and early_stopping(reports[-1]['{} {}'.format(
+        'val' if validator is not None else 'train', conf.stop_metric)]): break
     #---------------------------------------------------------------------------
     return model, df
 
@@ -143,17 +151,23 @@ def train(trainer, validator=None, **args):
 @click.option(       '--metrics', default=['Accuracy','Precision','Recall','F1','AUROC'], type=list)
 @click.option(          '--loss', default='CrossEntropyLoss')
 #-------------------------------------------------------------------------------
-@click.option(         '--optim', default='Adam')
-@click.option(            '--lr', default=5e-4)
-@click.option(  '--weight_decay', default=1e-4)
-@click.option('--clip_grad_norm', default=None)
-@click.option(     '--scheduler', default=None)
+@click.option(         '--optim', default='Adam', type=str)
+@click.option(            '--lr', default=5e-4, type=float)
+@click.option(         '--betas', default=[0.9,0.95], type=list)
+@click.option(  '--weight_decay', default=1e-4, type=float)
+@click.option('--clip_grad_norm', default=None, type=float)
+@click.option(     '--scheduler', default=None, type=str)
+@click.option('--early_stopping', default=False, is_flag=True)
+@click.option(   '--stop_metric', default='CrossEntropyLoss', type=str)
+@click.option(     '--stop_mode', default='min', type=str)
+@click.option(    '--stop_delta', default=0.0001, type=float)
+@click.option( '--stop_patience', default=10, type=int)
 #-------------------------------------------------------------------------------
 @click.option(          '--init', default=None)
 @click.option(        '--epochs', default=2**5)
 @click.option('--epoch_interval', default=2**5)
 @click.option(    '--batch_size', default=2**9)
-@click.option('--batch_interval', default=2**5)
+@click.option('--batch_interval', default=2**10)
 @click.option('--trainval_split', default=None)
 @click.pass_context
 def run(ctx, **args):
